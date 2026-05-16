@@ -4,12 +4,6 @@ pipeline {
 
     stages {
 
-        stage('Clone') {
-            steps {
-                git 'https://github.com/Chandan6169/Flutter_FastAPI_Posgresql_Docker-main.git'
-            }
-        }
-
         stage('Docker Build') {
             steps {
                 sh 'docker compose build'
