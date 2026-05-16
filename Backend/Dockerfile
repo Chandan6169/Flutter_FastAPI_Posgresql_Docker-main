@@ -1,5 +1,5 @@
 # Use an official Python runtime as a base image
-FROM python:3.10.0-slim-buster
+FROM python:3.10-slim
 
 # Copy the current directory contents into the container at /usr/src/app
 # Adjust this if your app directory is nested in another directory
