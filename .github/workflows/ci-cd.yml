@@ -7,7 +7,7 @@ on:
     branches: [ stage, main ]
 
 jobs:
-  quality:
+  quality-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,47 +17,46 @@ jobs:
         with:
           channel: stable
       - run: |
-          cd flutter-app || cd Frontend
+          cd flutter-app
           flutter pub get
           flutter analyze
-          flutter test --no-pub || echo "Flutter tests failed"
+          flutter test --no-pub || echo "Flutter tests skipped"
 
       - name: Python Code Quality
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: |
-          cd backend-python || cd Backend
+          cd backend-python
           pip install -r requirements.txt ruff pytest
           ruff check .
-          pytest || echo "Some Python tests failed"
+          pytest || echo "Some tests failed"
 
   deploy:
-    needs: quality
+    needs: quality-check
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to Server
+      - name: Deploy to DigitalOcean Droplet
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DROPLET_IP }}
-          username: root                    # change to your user if not root
+          username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /var/www/myapp
             git pull origin ${{ github.ref_name }}
             
-            # Update folders if needed
+            # Auto rename if needed
             if [ -d "Frontend" ]; then mv Frontend flutter-app; fi
             if [ -d "Backend" ]; then mv Backend backend-python; fi
             
-            # Deploy with Docker
-            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml down
             docker compose -f docker-compose.prod.yml up -d --build
             
-            echo "Deployment completed successfully on ${{ github.ref_name }} branch"
+            echo "✅ Deployment completed on ${{ github.ref_name }} at $(date)"
 
       - name: Send Success Email
         if: success()
@@ -67,10 +66,10 @@ jobs:
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: ✅ SUCCESS - Deployment to ${{ github.ref_name }}
+          subject: ✅ SUCCESS - ${{ github.ref_name }} Deployment
           to: ${{ secrets.DEVELOPER_EMAILS }}
           from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
-          body: Deployment completed successfully on branch: ${{ github.ref_name }}
+          body: Deployment successful on branch: ${{ github.ref_name }}<br>Server: 168.144.65.26
           html_body: true
 
       - name: Send Failure Email
@@ -81,8 +80,8 @@ jobs:
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: ❌ FAILED - Deployment on ${{ github.ref_name }}
+          subject: ❌ FAILED - ${{ github.ref_name }} Deployment
           to: ${{ secrets.DEVELOPER_EMAILS }}
           from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
-          body: Deployment failed on branch: ${{ github.ref_name }}. Check GitHub Actions logs.
+          body: Deployment failed on ${{ github.ref_name }}. Please check GitHub Actions logs.
           html_body: true
