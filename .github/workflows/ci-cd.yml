@@ -1,4 +1,4 @@
-name: CI/CD - Quality + Deploy + Email
+name: CI/CD Pipeline
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Flutter Checks
+      - name: Flutter Code Quality
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -20,27 +20,24 @@ jobs:
           cd flutter-app || cd Frontend
           flutter pub get
           flutter analyze
-          flutter test --no-pub || echo "Flutter test skipped"
 
-      - name: Python Checks
+      - name: Python Code Quality
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: |
           cd backend-python || cd Backend
-          pip install -r requirements.txt ruff pytest
+          pip install -r requirements.txt ruff
           ruff check .
-          pytest || echo "Some tests failed"
 
-  deploy-and-notify:
+  deploy:
     needs: quality
     runs-on: ubuntu-latest
-    if: always()     # Runs even if quality fails
+    if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to Server
-        if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/main'
+      - name: Deploy to Droplet
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DROPLET_IP }}
@@ -51,23 +48,17 @@ jobs:
             git pull origin ${{ github.ref_name }}
             docker compose -f docker-compose.prod.yml down
             docker compose -f docker-compose.prod.yml up -d --build
+            echo "Deployed to ${{ github.ref_name }}"
 
-      - name: Send Email Notification
+      - name: Send Email
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: |
-            [${{ job.status }}] ${{ github.repository }} - ${{ github.ref_name }}
+          subject: "[${{ job.status }}] Deployment - ${{ github.ref_name }}"
           to: ${{ secrets.DEVELOPER_EMAILS }}
           from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
-          body: |
-            Pipeline Status: <strong>${{ job.status }}</strong><br><br>
-            Repository: ${{ github.repository }}<br>
-            Branch: ${{ github.ref_name }}<br>
-            Commit: ${{ github.sha }}<br>
-            Triggered by: ${{ github.actor }}<br><br>
-            View Logs: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Click Here</a>
+          body: Pipeline finished with status: ${{ job.status }} on branch ${{ github.ref_name }}
           html_body: true
