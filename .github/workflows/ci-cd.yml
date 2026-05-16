@@ -1,4 +1,4 @@
-name: CI/CD - Quality + Auto Deploy
+name: CI/CD - Quality + Deploy + Email
 
 on:
   push:
@@ -7,39 +7,40 @@ on:
     branches: [ stage, main ]
 
 jobs:
-  quality-check:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Flutter Code Quality
+      - name: Flutter Checks
         uses: subosito/flutter-action@v2
         with:
           channel: stable
       - run: |
-          cd flutter-app
+          cd flutter-app || cd Frontend
           flutter pub get
           flutter analyze
-          flutter test --no-pub || echo "Flutter tests skipped"
+          flutter test --no-pub || echo "Flutter test skipped"
 
-      - name: Python Code Quality
+      - name: Python Checks
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: |
-          cd backend-python
+          cd backend-python || cd Backend
           pip install -r requirements.txt ruff pytest
           ruff check .
           pytest || echo "Some tests failed"
 
-  deploy:
-    needs: quality-check
+  deploy-and-notify:
+    needs: quality
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/main'
+    if: always()     # Runs even if quality fails
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to DigitalOcean Droplet
+      - name: Deploy to Server
+        if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/main'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DROPLET_IP }}
@@ -48,40 +49,25 @@ jobs:
           script: |
             cd /var/www/myapp
             git pull origin ${{ github.ref_name }}
-            
-            # Auto rename if needed
-            if [ -d "Frontend" ]; then mv Frontend flutter-app; fi
-            if [ -d "Backend" ]; then mv Backend backend-python; fi
-            
             docker compose -f docker-compose.prod.yml down
             docker compose -f docker-compose.prod.yml up -d --build
-            
-            echo "✅ Deployment completed on ${{ github.ref_name }} at $(date)"
 
-      - name: Send Success Email
-        if: success()
+      - name: Send Email Notification
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: ✅ SUCCESS - ${{ github.ref_name }} Deployment
+          subject: |
+            [${{ job.status }}] ${{ github.repository }} - ${{ github.ref_name }}
           to: ${{ secrets.DEVELOPER_EMAILS }}
           from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
-          body: Deployment successful on branch: ${{ github.ref_name }}<br>Server: 168.144.65.26
-          html_body: true
-
-      - name: Send Failure Email
-        if: failure()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: ❌ FAILED - ${{ github.ref_name }} Deployment
-          to: ${{ secrets.DEVELOPER_EMAILS }}
-          from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
-          body: Deployment failed on ${{ github.ref_name }}. Please check GitHub Actions logs.
+          body: |
+            Pipeline Status: <strong>${{ job.status }}</strong><br><br>
+            Repository: ${{ github.repository }}<br>
+            Branch: ${{ github.ref_name }}<br>
+            Commit: ${{ github.sha }}<br>
+            Triggered by: ${{ github.actor }}<br><br>
+            View Logs: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Click Here</a>
           html_body: true
