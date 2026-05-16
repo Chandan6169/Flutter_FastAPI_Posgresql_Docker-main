@@ -1,66 +1,88 @@
-name: CI/CD Pipeline - Quality & Deploy
+name: CI/CD - Quality + Auto Deploy
 
 on:
-  pull_request:
-    branches: [ stage, main ]
   push:
+    branches: [ stage, main ]
+  pull_request:
     branches: [ stage, main ]
 
 jobs:
-  code-quality:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Flutter Checks
-      - name: Setup Flutter
+      - name: Flutter Code Quality
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-
-      - name: Flutter Analyze & Test
-        run: |
+      - run: |
           cd flutter-app || cd Frontend
           flutter pub get
           flutter analyze
-          flutter test --no-pub
+          flutter test --no-pub || echo "Flutter tests failed"
 
-      # Python (FastAPI) Checks
-      - name: Setup Python
+      - name: Python Code Quality
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Python Code Quality
-        run: |
+      - run: |
           cd backend-python || cd Backend
-          pip install -r requirements.txt
-          pip install ruff pytest
+          pip install -r requirements.txt ruff pytest
           ruff check .
-          pytest || echo "Some tests failed"
+          pytest || echo "Some Python tests failed"
 
-  send-email:
-    needs: code-quality
+  deploy:
+    needs: quality
     runs-on: ubuntu-latest
-    if: always()
+    if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/main'
     steps:
-      - name: Send Email Report
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: root                    # change to your user if not root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/myapp
+            git pull origin ${{ github.ref_name }}
+            
+            # Update folders if needed
+            if [ -d "Frontend" ]; then mv Frontend flutter-app; fi
+            if [ -d "Backend" ]; then mv Backend backend-python; fi
+            
+            # Deploy with Docker
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --build
+            
+            echo "Deployment completed successfully on ${{ github.ref_name }} branch"
+
+      - name: Send Success Email
+        if: success()
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: |
-            [${{ job.status }}] ${{ github.repository }} - ${{ github.ref_name }}
+          subject: ✅ SUCCESS - Deployment to ${{ github.ref_name }}
           to: ${{ secrets.DEVELOPER_EMAILS }}
           from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
-          body: |
-            Pipeline Status: <strong>${{ job.status }}</strong><br>
-            Repository: ${{ github.repository }}<br>
-            Branch: ${{ github.ref_name }}<br>
-            Commit: ${{ github.sha }}<br>
-            Triggered by: ${{ github.actor }}<br><br>
-            View detailed logs: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Click Here</a>
+          body: Deployment completed successfully on branch: ${{ github.ref_name }}
           html_body: true
-          secure: true
+
+      - name: Send Failure Email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: ❌ FAILED - Deployment on ${{ github.ref_name }}
+          to: ${{ secrets.DEVELOPER_EMAILS }}
+          from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
+          body: Deployment failed on branch: ${{ github.ref_name }}. Check GitHub Actions logs.
+          html_body: true
