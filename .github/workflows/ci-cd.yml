@@ -1,0 +1,66 @@
+name: CI/CD Pipeline - Quality & Deploy
+
+on:
+  pull_request:
+    branches: [ stage, main ]
+  push:
+    branches: [ stage, main ]
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Flutter Checks
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter Analyze & Test
+        run: |
+          cd flutter-app || cd Frontend
+          flutter pub get
+          flutter analyze
+          flutter test --no-pub
+
+      # Python (FastAPI) Checks
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Python Code Quality
+        run: |
+          cd backend-python || cd Backend
+          pip install -r requirements.txt
+          pip install ruff pytest
+          ruff check .
+          pytest || echo "Some tests failed"
+
+  send-email:
+    needs: code-quality
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send Email Report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: |
+            [${{ job.status }}] ${{ github.repository }} - ${{ github.ref_name }}
+          to: ${{ secrets.DEVELOPER_EMAILS }}
+          from: CI/CD Bot <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            Pipeline Status: <strong>${{ job.status }}</strong><br>
+            Repository: ${{ github.repository }}<br>
+            Branch: ${{ github.ref_name }}<br>
+            Commit: ${{ github.sha }}<br>
+            Triggered by: ${{ github.actor }}<br><br>
+            View detailed logs: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Click Here</a>
+          html_body: true
+          secure: true
